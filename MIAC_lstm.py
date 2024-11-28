@@ -25,9 +25,9 @@ import time
 import json
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
-encoder_name='swinv2_cr_huge_224'
-model_layer=137984
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+encoder_name='efficientnetv2_s'
+model_layer=1280
 params={'image_size':224,
         'lr':2e-4,
         'beta1':0.5,
@@ -82,8 +82,8 @@ class CustomDataset(Dataset):
         image_index = torch.randint(low=0, high=len(
             image_path)-1, size=(self.image_count,))
         count = 0
-        for index in image_index:
-            image = Image.open(image_path[index]).convert('RGB')
+        for ind in image_index:
+            image = Image.open(image_path[ind]).convert('RGB')
             if self.transform is not None:
                 image = self.trans(self.transform(image))
             images[count] = image
@@ -228,20 +228,17 @@ class AttentionMILModel(nn.Module):
         return logits  
 
 
-class DecoderTransformer(nn.Module):
-    def __init__(self, embed_size, vocab_size, num_heads, hidden_size, num_layers, max_seq_length=100):
-        super(DecoderTransformer, self).__init__()
+class DecoderLSTM(nn.Module):
+    def __init__(self, embed_size, vocab_size, hidden_size, num_layers, max_seq_length=100):
+        super(DecoderLSTM, self).__init__()
         self.embed = nn.Embedding(vocab_size, embed_size)
-        self.positional_encoding = nn.Parameter(torch.zeros(1, max_seq_length, embed_size))
+        self.lstm = nn.LSTM(embed_size, hidden_size, num_layers, batch_first=True)
+        self.linear = nn.Linear(hidden_size, vocab_size)
         self.max_seq_length = max_seq_length
         self.vocab_size = vocab_size
-        
-        # Transformer Decoder
-        decoder_layer = nn.TransformerDecoderLayer(d_model=embed_size, nhead=num_heads, dim_feedforward=hidden_size)
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
-        
-        self.linear = nn.Linear(embed_size, vocab_size)
-        
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+
     def forward(self, features, captions, teacher_forcing_ratio=1.0):
         """
         features: (batch_size, embed_size)
@@ -252,27 +249,23 @@ class DecoderTransformer(nn.Module):
         
         # Output 저장을 위한 텐서 초기화
         outputs = torch.zeros(batch_size, max_seq_length, self.vocab_size).to(features.device)
-        
-        # features를 memory로 사용
-        memory = features.unsqueeze(0)  # (1, batch_size, embed_size)
+
+        # LSTM의 초기 hidden state와 cell state 설정
+        h = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(features.device)
+        c = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(features.device)
         
         # 첫 번째 입력 토큰은 <start> 토큰
         input_caption = captions[:, 0].unsqueeze(1)  # (batch_size, 1)
-        
+
         for t in range(1, max_seq_length):
-            # 임베딩 및 포지셔널 인코딩 적용
-            input_embedded = self.embed(input_caption) + self.positional_encoding[:, :input_caption.size(1), :]
-            input_embedded = input_embedded.permute(1, 0, 2)  # (seq_len, batch_size, embed_size)
+            # 현재 입력 임베딩
+            input_embedded = self.embed(input_caption)  # (batch_size, 1, embed_size)
             
-            # 타겟 마스크 생성
-            tgt_mask = self.generate_square_subsequent_mask(input_embedded.size(0)).to(features.device)
-            
-            # Transformer 디코더에 입력
-            transformer_output = self.transformer_decoder(input_embedded, memory, tgt_mask=tgt_mask)
-            transformer_output = transformer_output.permute(1, 0, 2)
+            # LSTM에 입력
+            lstm_out, (h, c) = self.lstm(input_embedded, (h, c))  # lstm_out: (batch_size, 1, hidden_size)
             
             # 현재 시간 스텝의 출력 계산
-            output = self.linear(transformer_output[:, -1, :])  # (batch_size, vocab_size)
+            output = self.linear(lstm_out.squeeze(1))  # (batch_size, vocab_size)
             outputs[:, t, :] = output  # 출력 저장
             
             # 다음 입력 결정 (교사 강요 비율에 따라)
@@ -285,15 +278,9 @@ class DecoderTransformer(nn.Module):
                 _, predicted = output.max(1)
                 next_input = predicted.unsqueeze(1)
             
-            # 다음 입력을 input_caption에 추가
-            input_caption = torch.cat([input_caption, next_input], dim=1)
+            input_caption = next_input  # 다음 입력 업데이트
         
         return outputs
-
-    def generate_square_subsequent_mask(self, sz):
-        """시퀀스의 순차적인 마스크 생성"""
-        mask = torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
-        return mask
 
     def sample(self, features, max_seq_length=None):
         """Greedy Search 방식으로 시퀀스를 샘플링합니다."""
@@ -302,21 +289,21 @@ class DecoderTransformer(nn.Module):
         
         batch_size = features.size(0)
         sampled_ids = []
+
+        # LSTM의 초기 hidden state와 cell state 설정
+        h = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(features.device)
+        c = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(features.device)
         
-        # 첫 번째 토큰은 <start> 토큰
+        # 첫 번째 입력 토큰은 <start> 토큰
         input_caption = torch.ones(batch_size, 1).long().to(features.device)
-        memory = features.unsqueeze(0)  # (1, batch_size, embed_size)
-        
+
         for _ in range(max_seq_length):
-            input_embedded = self.embed(input_caption) + self.positional_encoding[:, :input_caption.size(1), :]
-            input_embedded = input_embedded.permute(1, 0, 2)
-            tgt_mask = self.generate_square_subsequent_mask(input_embedded.size(0)).to(features.device)
-            transformer_output = self.transformer_decoder(input_embedded, memory, tgt_mask=tgt_mask)
-            transformer_output = transformer_output.permute(1, 0, 2)
-            output = self.linear(transformer_output[:, -1, :])  # (batch_size, vocab_size)
-            _, predicted = output.max(1)
+            input_embedded = self.embed(input_caption)  # (batch_size, 1, embed_size)
+            lstm_out, (h, c) = self.lstm(input_embedded, (h, c))  # lstm_out: (batch_size, 1, hidden_size)
+            output = self.linear(lstm_out.squeeze(1))  # (batch_size, vocab_size)
+            _, predicted = output.max(1)  # 가장 높은 확률의 단어 선택
             sampled_ids.append(predicted)
-            input_caption = torch.cat([input_caption, predicted.unsqueeze(1)], dim=1)
+            input_caption = predicted.unsqueeze(1)
         
         sampled_ids = torch.stack(sampled_ids, 1)
         return sampled_ids
@@ -350,7 +337,7 @@ val_dataloader=DataLoader(test_dataset,batch_size=params['batch_size'],shuffle=T
 
 Feature_Extractor=FeatureExtractor()
 encoder = AttentionMILModel(300,model_layer,Feature_Extractor).to(device)
-decoder = DecoderTransformer(params['embed_size'], len(vocab), 15, params['hidden_size'], params['num_layers']).to(device).to(device)
+decoder =  DecoderLSTM(params['embed_size'], len(vocab), 15, params['hidden_size'], params['num_layers']).to(device).to(device)
 criterion = nn.CrossEntropyLoss()
 model_param = list(decoder.parameters()) + list(encoder.parameters())
 optimizer = torch.optim.Adam(model_param, lr=params['lr'], betas=(params['beta1'], params['beta2']))
@@ -444,5 +431,5 @@ for epoch in range(params['epochs']):
             val.set_description(f"val epoch: {epoch+1}/{params['epochs']} Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-1: {val_bleu_score/(val_count):.4f}")
     if val_bleu_score/val_count>sum_loss:
         sum_loss=val_bleu_score/val_count
-        torch.save(encoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_encoder_check.pth')
-        torch.save(decoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_decoder_check.pth')
+        torch.save(encoder.state_dict(), '../../model/'+encoder_name+'_and_lstm_encoder_check.pth')
+        torch.save(decoder.state_dict(), '../../model/'+encoder_name+'_and_lstm_decoder_check.pth')
