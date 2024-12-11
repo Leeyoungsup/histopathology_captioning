@@ -25,11 +25,11 @@ import time
 import json
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:4' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 encoder_name='efficientnetv2_s'
 model_layer=1280
 params={'image_size':224,
-        'lr':2e-4,
+        'lr':2e-3,
         'beta1':0.5,
         'beta2':0.999,
         'batch_size':4,
@@ -76,7 +76,7 @@ class CustomDataset(Dataset):
         df = self.df
         vocab = self.vocab
         img_id=df.loc[index]
-        image_path = glob(self.root+'patches_captions/'+img_id['id']+'*.jpg')
+        image_path = glob(self.root+'f_patches_captions/'+img_id['id']+'/*.jpg')
         caption=img_id['text']
         images=torch.zeros(self.image_count,3,self.image_size,self.image_size)
         image_index = torch.randint(low=0, high=len(
@@ -227,7 +227,6 @@ class AttentionMILModel(nn.Module):
         
         return logits  
 
-
 class DecoderLSTM(nn.Module):
     def __init__(self, embed_size, vocab_size, hidden_size, num_layers, max_seq_length=100):
         super(DecoderLSTM, self).__init__()
@@ -238,6 +237,9 @@ class DecoderLSTM(nn.Module):
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
+        
+        # Positional Encoding (optional)
+        self.positional_encoding = nn.Parameter(torch.zeros(1, max_seq_length, embed_size))
 
     def forward(self, features, captions, teacher_forcing_ratio=1.0):
         """
@@ -247,66 +249,79 @@ class DecoderLSTM(nn.Module):
         batch_size = features.size(0)
         max_seq_length = captions.size(1)
         
-        # Output 저장을 위한 텐서 초기화
-        outputs = torch.zeros(batch_size, max_seq_length, self.vocab_size).to(features.device)
-
-        # LSTM의 초기 hidden state와 cell state 설정
+        # LSTM의 초기 hidden state와 cell state
         h = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(features.device)
         c = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(features.device)
         
-        # 첫 번째 입력 토큰은 <start> 토큰
+        # 첫 번째 입력은 <start> 토큰
         input_caption = captions[:, 0].unsqueeze(1)  # (batch_size, 1)
-
+        
+        # Output 저장
+        outputs = torch.zeros(batch_size, max_seq_length, self.vocab_size).to(features.device)
+        
         for t in range(1, max_seq_length):
-            # 현재 입력 임베딩
+            # Embedding과 Positional Encoding
             input_embedded = self.embed(input_caption)  # (batch_size, 1, embed_size)
+            if self.positional_encoding is not None:
+                input_embedded += self.positional_encoding[:, :1, :]
             
-            # LSTM에 입력
-            lstm_out, (h, c) = self.lstm(input_embedded, (h, c))  # lstm_out: (batch_size, 1, hidden_size)
+            # LSTM 한 스텝 실행
+            lstm_out, (h, c) = self.lstm(input_embedded, (h, c))  # (batch_size, 1, hidden_size)
             
             # 현재 시간 스텝의 출력 계산
             output = self.linear(lstm_out.squeeze(1))  # (batch_size, vocab_size)
-            outputs[:, t, :] = output  # 출력 저장
+            outputs[:, t, :] = output
             
-            # 다음 입력 결정 (교사 강요 비율에 따라)
-            use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+            # Teacher Forcing
+            use_teacher_forcing = random.random() < teacher_forcing_ratio
             if use_teacher_forcing:
-                # 실제 캡션의 다음 토큰 사용
+                # 다음 입력으로 정답 캡션 사용
                 next_input = captions[:, t].unsqueeze(1)
             else:
-                # 모델의 예측 사용
+                # 다음 입력으로 모델의 예측 사용
                 _, predicted = output.max(1)
                 next_input = predicted.unsqueeze(1)
             
-            input_caption = next_input  # 다음 입력 업데이트
+            input_caption = next_input
         
         return outputs
 
     def sample(self, features, max_seq_length=None):
-        """Greedy Search 방식으로 시퀀스를 샘플링합니다."""
+        """
+        Greedy Search를 사용한 시퀀스 샘플링
+        """
         if max_seq_length is None:
             max_seq_length = self.max_seq_length
         
         batch_size = features.size(0)
         sampled_ids = []
-
-        # LSTM의 초기 hidden state와 cell state 설정
+        
+        # LSTM 초기 상태
         h = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(features.device)
         c = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(features.device)
         
-        # 첫 번째 입력 토큰은 <start> 토큰
-        input_caption = torch.ones(batch_size, 1).long().to(features.device)
-
-        for _ in range(max_seq_length):
-            input_embedded = self.embed(input_caption)  # (batch_size, 1, embed_size)
-            lstm_out, (h, c) = self.lstm(input_embedded, (h, c))  # lstm_out: (batch_size, 1, hidden_size)
-            output = self.linear(lstm_out.squeeze(1))  # (batch_size, vocab_size)
-            _, predicted = output.max(1)  # 가장 높은 확률의 단어 선택
-            sampled_ids.append(predicted)
-            input_caption = predicted.unsqueeze(1)
+        # 첫 입력은 <start> 토큰
+        input_caption = torch.ones(batch_size, 1).long().to(features.device)  # <start> token ID
         
-        sampled_ids = torch.stack(sampled_ids, 1)
+        for _ in range(max_seq_length):
+            # Embedding과 Positional Encoding
+            input_embedded = self.embed(input_caption)  # (batch_size, 1, embed_size)
+            if self.positional_encoding is not None:
+                input_embedded += self.positional_encoding[:, :1, :]
+            
+            # LSTM 한 스텝 실행
+            lstm_out, (h, c) = self.lstm(input_embedded, (h, c))
+            
+            # 출력 계산
+            output = self.linear(lstm_out.squeeze(1))  # (batch_size, vocab_size)
+            _, predicted = output.max(1)  # 가장 확률이 높은 단어 선택
+            
+            sampled_ids.append(predicted)
+            input_caption = predicted.unsqueeze(1)  # 다음 입력으로 업데이트
+        
+        sampled_ids = torch.stack(sampled_ids, 1)  # (batch_size, max_seq_length)
         return sampled_ids
+
     
 def bleu_n(pred_words_list,label_words_list):
 
@@ -340,7 +355,7 @@ encoder = AttentionMILModel(300,model_layer,Feature_Extractor).to(device)
 decoder =  DecoderLSTM(params['embed_size'], len(vocab), 15, params['hidden_size'], params['num_layers']).to(device).to(device)
 criterion = nn.CrossEntropyLoss()
 model_param = list(decoder.parameters()) + list(encoder.parameters())
-optimizer = torch.optim.Adam(model_param, lr=params['lr'], betas=(params['beta1'], params['beta2']))
+optimizer = torch.optim.AdamW(model_param, lr=params['lr'], betas=(params['beta1'], params['beta2']))
 # summary(encoder, input_size=(params['batch_size'],50, 3, params['image_size'], params['image_size']))
 
 
@@ -357,7 +372,8 @@ for epoch in range(params['epochs']):
     
     # 에폭마다 teacher_forcing_ratio 조정 (예: 점진적으로 감소)
     teacher_forcing_ratio = max(0.5, 1.0 - (epoch * 0.05))
-    
+    encoder.train()
+    decoder.train()
     for images, captions, lengths in train:
         count += 1
         images = images.to(device)
@@ -386,7 +402,8 @@ for epoch in range(params['epochs']):
         
         train_loss += loss.item()
         train.set_description(f"train epoch: {epoch+1}/{params['epochs']} Step: {count} loss : {train_loss/count:.4f}")
-
+    encoder.eval()
+    decoder.eval()  
     with torch.no_grad():
         val_count = 0
         val_loss = 0.0 
@@ -416,7 +433,7 @@ for epoch in range(params['epochs']):
             
             # BLEU 점수 계산
             for i in range(images.size(0)):
-                val_count += 1
+                
                 predicted_caption = idx2word(vocab, sampled_ids[i])
                 target_caption = idx2word(vocab, captions[i])
                 
@@ -427,7 +444,7 @@ for epoch in range(params['epochs']):
                 # BLEU-4 점수 계산
                 bleu_score = sentence_bleu([target_caption], predicted_caption, weights=(1, 0, 0, 0))
                 val_bleu_score += bleu_score
-            
+            val_count += 1
             val.set_description(f"val epoch: {epoch+1}/{params['epochs']} Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-1: {val_bleu_score/(val_count):.4f}")
     if val_bleu_score/val_count>sum_loss:
         sum_loss=val_bleu_score/val_count
