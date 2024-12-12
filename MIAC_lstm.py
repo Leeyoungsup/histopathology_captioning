@@ -25,9 +25,9 @@ import time
 import json
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-encoder_name='efficientnetv2_s'
-model_layer=1280
+device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+encoder_name='resnet50'
+model_layer=2048
 params={'image_size':224,
         'lr':2e-3,
         'beta1':0.5,

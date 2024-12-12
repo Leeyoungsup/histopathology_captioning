@@ -25,14 +25,14 @@ import time
 import json
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
-encoder_name='coatnet_0_224'
+device = torch.device('cuda:2' if torch.cuda.is_available() else 'cpu')
+encoder_name='swinv2_cr_tiny_224'
 model_layer=37632
 params={'image_size':224,
         'lr':2e-4,
         'beta1':0.5,
         'beta2':0.999,
-        'batch_size':2,
+        'batch_size':4,
         'epochs':10000,
         'image_count':25,
         'data_path':'../../data/PatchGastricADC22/',
@@ -76,14 +76,14 @@ class CustomDataset(Dataset):
         df = self.df
         vocab = self.vocab
         img_id=df.loc[index]
-        image_path = glob(self.root+'patches_captions/'+img_id['id']+'*.jpg')
+        image_path = glob(self.root+'f_patches_captions/'+img_id['id']+'/*.jpg')
         caption=img_id['text']
         images=torch.zeros(self.image_count,3,self.image_size,self.image_size)
         image_index = torch.randint(low=0, high=len(
             image_path)-1, size=(self.image_count,))
         count = 0
-        for index in image_index:
-            image = Image.open(image_path[index]).convert('RGB')
+        for ind in image_index:
+            image = Image.open(image_path[ind]).convert('RGB')
             if self.transform is not None:
                 image = self.trans(self.transform(image))
             images[count] = image
@@ -428,8 +428,9 @@ for epoch in range(params['epochs']):
             sampled_ids = decoder.sample(features)
             
             # BLEU 점수 계산
+            val_count += 1
             for i in range(images.size(0)):
-                val_count += 1
+                
                 predicted_caption = idx2word(vocab, sampled_ids[i])
                 target_caption = idx2word(vocab, captions[i])
                 
