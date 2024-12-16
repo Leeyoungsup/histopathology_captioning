@@ -25,8 +25,8 @@ import time
 import json
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:2' if torch.cuda.is_available() else 'cpu')
-encoder_name='swinv2_cr_tiny_224'
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+encoder_name='swinv2_cr_small_224'
 model_layer=37632
 params={'image_size':224,
         'lr':2e-4,
@@ -34,12 +34,12 @@ params={'image_size':224,
         'beta2':0.999,
         'batch_size':4,
         'epochs':10000,
-        'image_count':25,
+        'image_count':10,
         'data_path':'../../data/PatchGastricADC22/',
         'train_csv':'train_captions.csv',
         'val_csv':'test_captions.csv',
         'vocab_path':'../../data/PatchGastricADC22/vocab.pkl',
-        'embed_size':300,
+        'embed_size':1024,
         'hidden_size':256,
         'num_layers':4,}
 
@@ -85,7 +85,8 @@ class CustomDataset(Dataset):
         for ind in image_index:
             image = Image.open(image_path[ind]).convert('RGB')
             if self.transform is not None:
-                image = self.trans(self.transform(image))
+                image=self.transform(image).to(device)
+                image = self.trans(image)
             images[count] = image
             count += 1
         # Convert caption (string) to word ids.
@@ -339,7 +340,7 @@ def bleu_n(pred_words_list,label_words_list):
 with open(params['vocab_path'], 'rb') as f:
         vocab = pickle.load(f)
 transform = transforms.Compose([ 
-        transforms.Resize((params['image_size'],params['image_size'])),
+        transforms.RandomCrop((params['image_size'],params['image_size'])),
         transforms.ToTensor()])
 
 train_dataset=CustomDataset(params['data_path'],params['image_count'],params['image_size'],params['train_csv'],'train',vocab,transform=transform)
@@ -349,8 +350,8 @@ val_dataloader=DataLoader(test_dataset,batch_size=params['batch_size'],shuffle=T
 
 
 Feature_Extractor=FeatureExtractor()
-encoder = AttentionMILModel(300,model_layer,Feature_Extractor).to(device)
-decoder = DecoderTransformer(params['embed_size'], len(vocab), 15, params['hidden_size'], params['num_layers']).to(device).to(device)
+encoder = AttentionMILModel(params['embed_size'],model_layer,Feature_Extractor).to(device)
+decoder = DecoderTransformer(params['embed_size'], len(vocab), 16, params['hidden_size'], params['num_layers']).to(device).to(device)
 criterion = nn.CrossEntropyLoss()
 model_param = list(decoder.parameters()) + list(encoder.parameters())
 optimizer = torch.optim.Adam(model_param, lr=params['lr'], betas=(params['beta1'], params['beta2']))
@@ -358,7 +359,7 @@ optimizer = torch.optim.Adam(model_param, lr=params['lr'], betas=(params['beta1'
 
 
 plt_count=0
-sum_loss= 0
+sum_loss= 500000
 scheduler = 0.90
 teacher_forcing=0.0
 import random  # random 모듈 임포트
@@ -442,8 +443,8 @@ for epoch in range(params['epochs']):
                 bleu_score = sentence_bleu([target_caption], predicted_caption, weights=(1, 0, 0, 0))
                 val_bleu_score += bleu_score
             
-            val.set_description(f"val epoch: {epoch+1}/{params['epochs']} Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-1: {val_bleu_score/(val_count):.4f}")
-    if val_bleu_score/val_count>sum_loss:
-        sum_loss=val_bleu_score/val_count
-        torch.save(encoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_encoder_check.pth')
-        torch.save(decoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_decoder_check.pth')
+            val.set_description(f"val epoch: {epoch+1}/{params['epochs']} Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-1: {val_bleu_score/(val_count*params['batch_size']):.4f}")
+    if val_loss/val_count<sum_loss:
+        sum_loss=val_loss/val_count
+        torch.save(encoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_encoder_check.pth')
+        torch.save(decoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_decoder_check.pth')
