@@ -25,16 +25,16 @@ import time
 import json
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-encoder_name='swinv2_cr_small_224'
-model_layer=37632
-params={'image_size':224,
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+encoder_name='efficientnetv2_m'
+model_layer=1280
+params={'image_size':300,
         'lr':2e-4,
         'beta1':0.5,
         'beta2':0.999,
         'batch_size':4,
         'epochs':10000,
-        'image_count':10,
+        'image_count':25,
         'data_path':'../../data/PatchGastricADC22/',
         'train_csv':'train_captions.csv',
         'val_csv':'test_captions.csv',
@@ -328,13 +328,13 @@ def bleu_n(pred_words_list,label_words_list):
 
 
 # BLEU@2 calculation
-    bleu2 = sentence_bleu([label_words_list], pred_words_list, weights=(0, 1, 0, 0))
+    bleu2 = sentence_bleu([label_words_list], pred_words_list, weights=(0.5, 0.5, 0.0, 0.0))
 
 
-    bleu3=sentence_bleu([label_words_list], pred_words_list, weights=(0, 0, 1, 0))
+    bleu3=sentence_bleu([label_words_list], pred_words_list, weights=(0.33, 0.33, 0.33, 0.0))
 
 
-    bleu4=sentence_bleu([label_words_list], pred_words_list, weights=(0, 0, 0, 1))
+    bleu4=sentence_bleu([label_words_list], pred_words_list, weights=(0.25, 0.25, 0.25, 0.25))
     return bleu1,bleu2,bleu3,bleu4
 
 with open(params['vocab_path'], 'rb') as f:
@@ -370,7 +370,7 @@ for epoch in range(params['epochs']):
     train_loss = 0.0
     
     # 에폭마다 teacher_forcing_ratio 조정 (예: 점진적으로 감소)
-    teacher_forcing_ratio = max(0.5, 1.0 - (epoch * 0.05))
+    teacher_forcing_ratio = max(0.0, 0.5 - (epoch * 0.025))
     
     for images, captions, lengths in train:
         count += 1
