@@ -26,10 +26,10 @@ import json
 nltk.download('punkt')
 tf = ToTensor()
 device = torch.device('cuda:2' if torch.cuda.is_available() else 'cpu')
-encoder_name='resnet50'
-model_layer=2048
-params={'image_size':224,
-        'lr':2e-3,
+encoder_name='efficientnetv2_s'
+model_layer=1280
+params={'image_size':300,
+        'lr':2e-4,
         'beta1':0.5,
         'beta2':0.999,
         'batch_size':4,
@@ -39,7 +39,7 @@ params={'image_size':224,
         'train_csv':'train_captions.csv',
         'val_csv':'test_captions.csv',
         'vocab_path':'../../data/PatchGastricADC22/vocab.pkl',
-        'embed_size':300,
+        'embed_size':512,
         'hidden_size':256,
         'num_layers':4,}
 
@@ -85,7 +85,8 @@ class CustomDataset(Dataset):
         for ind in image_index:
             image = Image.open(image_path[ind]).convert('RGB')
             if self.transform is not None:
-                image = self.trans(self.transform(image))
+                image=self.transform(image).to(device)
+                image = self.trans(image)
             images[count] = image
             count += 1
         # Convert caption (string) to word ids.
@@ -351,8 +352,8 @@ val_dataloader=DataLoader(test_dataset,batch_size=params['batch_size'],shuffle=T
 
 
 Feature_Extractor=FeatureExtractor()
-encoder = AttentionMILModel(300,model_layer,Feature_Extractor).to(device)
-decoder =  DecoderLSTM(params['embed_size'], len(vocab), 15, params['hidden_size'], params['num_layers']).to(device).to(device)
+encoder = AttentionMILModel(params['embed_size'],model_layer,Feature_Extractor).to(device)
+decoder =  DecoderLSTM(params['embed_size'], len(vocab), 16, params['hidden_size'], params['num_layers']).to(device).to(device)
 criterion = nn.CrossEntropyLoss()
 model_param = list(decoder.parameters()) + list(encoder.parameters())
 optimizer = torch.optim.AdamW(model_param, lr=params['lr'], betas=(params['beta1'], params['beta2']))
@@ -371,7 +372,8 @@ for epoch in range(params['epochs']):
     train_loss = 0.0
     
     # 에폭마다 teacher_forcing_ratio 조정 (예: 점진적으로 감소)
-    teacher_forcing_ratio = max(0.5, 1.0 - (epoch * 0.05))
+    teacher_forcing_ratio = 0.95 ** epoch  # 지수적 감소
+    teacher_forcing_ratio = max(0.2, teacher_forcing_ratio)
     encoder.train()
     decoder.train()
     for images, captions, lengths in train:
@@ -442,7 +444,7 @@ for epoch in range(params['epochs']):
                 target_caption = [word for word in target_caption if word not in ['<start>', '<end>', '<pad>']]
                 
                 # BLEU-4 점수 계산
-                bleu_score = sentence_bleu([target_caption], predicted_caption, weights=(1, 0, 0, 0))
+                bleu_score = sentence_bleu([target_caption], predicted_caption, weights=(0.25, 0.25, 0.25, 0.25))
                 val_bleu_score += bleu_score
             val_count += 1
             val.set_description(f"val epoch: {epoch+1}/{params['epochs']} Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-1: {val_bleu_score/(val_count):.4f}")

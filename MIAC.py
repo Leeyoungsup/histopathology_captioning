@@ -25,16 +25,16 @@ import time
 import json
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
-encoder_name='efficientnetv2_m'
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+encoder_name='efficientnetv2_s'
 model_layer=1280
 params={'image_size':300,
-        'lr':2e-4,
+        'lr':1e-5,
         'beta1':0.5,
         'beta2':0.999,
         'batch_size':4,
         'epochs':10000,
-        'image_count':25,
+        'image_count':10,
         'data_path':'../../data/PatchGastricADC22/',
         'train_csv':'train_captions.csv',
         'val_csv':'test_captions.csv',
@@ -359,7 +359,7 @@ optimizer = torch.optim.Adam(model_param, lr=params['lr'], betas=(params['beta1'
 
 
 plt_count=0
-sum_loss= 500000
+sum_loss= 0
 scheduler = 0.90
 teacher_forcing=0.0
 import random  # random 모듈 임포트
@@ -370,7 +370,8 @@ for epoch in range(params['epochs']):
     train_loss = 0.0
     
     # 에폭마다 teacher_forcing_ratio 조정 (예: 점진적으로 감소)
-    teacher_forcing_ratio = max(0.0, 0.5 - (epoch * 0.025))
+    teacher_forcing_ratio = 0.98 ** epoch  # 지수적 감소
+    teacher_forcing_ratio = max(0.2, teacher_forcing_ratio)
     
     for images, captions, lengths in train:
         count += 1
@@ -440,11 +441,11 @@ for epoch in range(params['epochs']):
                 target_caption = [word for word in target_caption if word not in ['<start>', '<end>', '<pad>']]
                 
                 # BLEU-4 점수 계산
-                bleu_score = sentence_bleu([target_caption], predicted_caption, weights=(1, 0, 0, 0))
+                bleu_score = sentence_bleu([target_caption], predicted_caption, weights=(0.25, 0.25, 0.25, 0.25))
                 val_bleu_score += bleu_score
             
-            val.set_description(f"val epoch: {epoch+1}/{params['epochs']} Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-1: {val_bleu_score/(val_count*params['batch_size']):.4f}")
-    if val_loss/val_count<sum_loss:
-        sum_loss=val_loss/val_count
+            val.set_description(f"val epoch: {epoch+1}/{params['epochs']} Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-4: {val_bleu_score/(val_count*params['batch_size']):.4f}")
+    if val_bleu_score/(val_count*params['batch_size'])>sum_loss:
+        sum_loss=val_bleu_score/(val_count*params['batch_size'])
         torch.save(encoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_encoder_check.pth')
         torch.save(decoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_decoder_check.pth')
