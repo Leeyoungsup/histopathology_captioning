@@ -25,7 +25,7 @@ import time
 import json
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
 encoder_name='efficientnetv2_s'
 model_layer=1280
 params={'image_size':300,
@@ -34,7 +34,7 @@ params={'image_size':300,
         'beta2':0.999,
         'batch_size':4,
         'epochs':10000,
-        'image_count':10,
+        'image_count':25,
         'data_path':'../../data/PatchGastricADC22/',
         'train_csv':'train_captions.csv',
         'val_csv':'test_captions.csv',
@@ -346,7 +346,7 @@ transform = transforms.Compose([
 train_dataset=CustomDataset(params['data_path'],params['image_count'],params['image_size'],params['train_csv'],'train',vocab,transform=transform)
 test_dataset=CustomDataset(params['data_path'],params['image_count'],params['image_size'],params['val_csv'],'val',vocab,transform=transform)
 train_dataloader=DataLoader(train_dataset,batch_size=params['batch_size'],shuffle=True,collate_fn=collate_fn)
-val_dataloader=DataLoader(test_dataset,batch_size=params['batch_size'],shuffle=True,collate_fn=collate_fn)
+val_dataloader=DataLoader(test_dataset,batch_size=params['batch_size'],shuffle=False,collate_fn=collate_fn)
 
 
 Feature_Extractor=FeatureExtractor()
