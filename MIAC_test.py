@@ -15,7 +15,6 @@ import torch.nn.functional as F
 from PIL import Image
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from nltk.translate.bleu_score import sentence_bleu
 import timm
 import random
 from torchinfo import summary
@@ -23,21 +22,26 @@ from glob import glob
 from torchvision.transforms import ToTensor
 import time
 import json
+import pymeteor.pymeteor
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from rouge_score import rouge_scorer
+from pycocoevalcap.cider.cider import Cider
+from nltk.util import ngrams
+from collections import Counter
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
 encoder_name='efficientnetv2_s'
 model_layer=1280
 params={'image_size':300,
-        'lr':1e-5,
+        'lr':2e-4,
         'beta1':0.5,
         'beta2':0.999,
         'batch_size':4,
         'epochs':10000,
-        'image_count':50,
+        'image_count':25,
         'data_path':'../../data/PatchGastricADC22/',
-        'train_csv':'train_captions.csv',
-        'val_csv':'test_captions.csv',
+        'test_csv':'test_captions.csv',
         'vocab_path':'../../data/PatchGastricADC22/vocab.pkl',
         'embed_size':1024,
         'hidden_size':256,
@@ -86,7 +90,6 @@ class CustomDataset(Dataset):
             image = Image.open(image_path[ind]).convert('RGB')
             if self.transform is not None:
                 image=self.transform(image).to(device)
-                image = self.trans(image)
             images[count] = image
             count += 1
         # Convert caption (string) to word ids.
@@ -101,7 +104,6 @@ class CustomDataset(Dataset):
     def __len__(self):
         return len(self.df)
     
-
 
 class Vocabulary(object):
     """Simple vocabulary wrapper."""
@@ -158,12 +160,13 @@ def collate_fn(data):
 def idx2word(vocab, indices):
     sentence = []
     
-    aa=indices.cpu().numpy()
+    indices=indices.cpu().numpy()
     
-    for index in aa:
-        word = vocab.idx2word[index]
+    for index in indices:
+        word = vocab.idx2word[index.item()]
         sentence.append(word)
     return sentence
+
 def word2sentence(words_list):
     sentence=''
     for word in words_list:
@@ -336,77 +339,140 @@ def bleu_n(pred_words_list,label_words_list):
 
     bleu4=sentence_bleu([label_words_list], pred_words_list, weights=(0.25, 0.25, 0.25, 0.25))
     return bleu1,bleu2,bleu3,bleu4
+def rouge_scores(pred_sentence, label_sentence):
+    # Initialize the ROUGE scorer
+    scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
+    
+    # Calculate the scores
+    scores = scorer.score(label_sentence, pred_sentence)
+    
+    # Extract the precision, recall, and f1 scores for each ROUGE metric
+    rouge1 = scores['rouge1']
+    rouge2 = scores['rouge2']
+    rougeL = scores['rougeL']
+    
+    # Return the ROUGE scores
+    return rouge1, rouge2, rougeL
 
+def calculate_cider(references, hypotheses):
+    """
+    CIDEr 점수를 계산합니다.
+
+    Args:
+        references (list of str): 각 이미지의 참조 설명 문장들.
+        hypotheses (list of str): 각 이미지에 대한 생성된 설명 문장들.
+
+    Returns:
+        float: CIDEr 점수의 평균값.
+        list of float: 각 이미지에 대한 CIDEr 점수.
+    """
+    # pycocoevalcap 라이브러리는 references와 hypotheses의 형식을 다음과 같이 요구합니다.
+    gts = {i: [ref] for i, ref in enumerate(references)}
+    res = {i: [hypothesis] for i, hypothesis in enumerate(hypotheses)}
+
+    # CIDEr 계산
+    cider_scorer = Cider()
+    cider_score, cider_per_image_scores = cider_scorer.compute_score(gts, res)
+
+    return cider_score, cider_per_image_scores
+
+# 1/2-gram Precision 계산 함수
+def calculate_ngram_precision(references, hypotheses, n):
+    """
+    Calculates n-gram precision for a set of generated captions against reference captions.
+
+    Args:
+        references (list of str): List of reference captions.
+        hypotheses (list of str): List of generated captions.
+        n (int): The n-gram size.
+
+    Returns:
+        list of float: Precision scores for each hypothesis.
+    """
+    precision_scores = []
+
+    for hypothesis, reference in zip(hypotheses, references):
+        # Tokenize hypothesis and reference
+        hypothesis_tokens = hypothesis.split()
+        reference_tokens = reference.split()
+
+        # Generate n-grams
+        hypothesis_ngrams = list(ngrams(hypothesis_tokens, n))
+        reference_ngrams = list(ngrams(reference_tokens, n))
+
+        # Count n-gram occurrences
+        hypothesis_counts = Counter(hypothesis_ngrams)
+        reference_counts = Counter(reference_ngrams)
+
+        # Calculate overlapping n-grams
+        overlap = sum((hypothesis_counts & reference_counts).values())
+        total = sum(hypothesis_counts.values())
+
+        # Precision calculation
+        precision = overlap / total if total > 0 else 0.0
+        precision_scores.append(precision)
+
+    return precision_scores
+
+# Mean and SD Calculation for Average 1/2-gram Precision
+def calculate_mean_sd_average_precision(references, hypotheses):
+    """
+    Calculates mean and standard deviation for the average of 1-gram and 2-gram precision.
+
+    Args:
+        references (list of str): List of reference captions.
+        hypotheses (list of str): List of generated captions.
+
+    Returns:
+        dict: Mean and SD for the average 1/2-gram precision.
+    """
+    avg_precisions = []
+
+    for hypothesis, reference in zip(hypotheses, references):
+        precisions = []
+        for n in [1, 2]:
+            ngram_precision = calculate_ngram_precision([reference], [hypothesis], n)
+            precisions.append(ngram_precision[0])
+        avg_precisions.append(np.mean(precisions))
+
+    mean_avg_precision = np.mean(avg_precisions)
+    sd_avg_precision = np.std(avg_precisions)
+
+    return {"mean": mean_avg_precision, "sd": sd_avg_precision}
 with open(params['vocab_path'], 'rb') as f:
         vocab = pickle.load(f)
 transform = transforms.Compose([ 
         transforms.RandomCrop((params['image_size'],params['image_size'])),
         transforms.ToTensor()])
 
-train_dataset=CustomDataset(params['data_path'],params['image_count'],params['image_size'],params['train_csv'],'train',vocab,transform=transform)
-test_dataset=CustomDataset(params['data_path'],params['image_count'],params['image_size'],params['val_csv'],'val',vocab,transform=transform)
-train_dataloader=DataLoader(train_dataset,batch_size=params['batch_size'],shuffle=True,collate_fn=collate_fn)
-val_dataloader=DataLoader(test_dataset,batch_size=params['batch_size'],shuffle=False,collate_fn=collate_fn)
 
+test_dataset=CustomDataset(params['data_path'],params['image_count'],params['image_size'],params['test_csv'],'test',vocab,transform=transform)
 
+test_dataloader=DataLoader(test_dataset,batch_size=params['batch_size'],shuffle=False,collate_fn=collate_fn)
 Feature_Extractor=FeatureExtractor()
 encoder = AttentionMILModel(params['embed_size'],model_layer,Feature_Extractor).to(device)
 decoder = DecoderTransformer(params['embed_size'], len(vocab), 16, params['hidden_size'], params['num_layers']).to(device).to(device)
 criterion = nn.CrossEntropyLoss()
 model_param = list(decoder.parameters()) + list(encoder.parameters())
 optimizer = torch.optim.Adam(model_param, lr=params['lr'], betas=(params['beta1'], params['beta2']))
-# summary(encoder, input_size=(params['batch_size'],50, 3, params['image_size'], params['image_size']))
+encoder.load_state_dict(torch.load('../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_encoder_check.pth',map_location=device))
+decoder.load_state_dict(torch.load('../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_decoder_check.pth',map_location=device))
 
-
-plt_count=0
-sum_loss= 0
-scheduler = 0.90
-teacher_forcing=0.0
-import random  # random 모듈 임포트
-
-for epoch in range(params['epochs']):
-    train = tqdm(train_dataloader)
-    count = 0
-    train_loss = 0.0
-    
-    # 에폭마다 teacher_forcing_ratio 조정 (예: 점진적으로 감소)
-    teacher_forcing_ratio = 0.98 ** epoch  # 지수적 감소
-    teacher_forcing_ratio = max(0.2, teacher_forcing_ratio)
-    
-    for images, captions, lengths in train:
-        count += 1
-        images = images.to(device)
-        captions = captions.to(device)
-        
-        # Encoder를 통해 특징 추출
-        features = encoder(images)
-        
-        # 디코더에 입력 (teacher_forcing_ratio 적용)
-        outputs = decoder(features, captions, teacher_forcing_ratio=teacher_forcing_ratio)
-        
-        # 출력 및 타겟의 차원 맞추기
-        captions_target = captions[:, 1:]  # 첫 번째 토큰(<start>) 제외
-        outputs = outputs[:, 1:, :]  # 첫 번째 출력 제외
-        outputs = outputs.reshape(-1, outputs.size(2))  # (batch_size * seq_length, vocab_size)
-        targets = captions_target.reshape(-1)  # (batch_size * seq_length)
-        
-        # 손실 계산
-        loss = criterion(outputs, targets)
-        
-        # 역전파 및 옵티마이저 스텝
-        decoder.zero_grad()
-        encoder.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        train_loss += loss.item()
-        train.set_description(f"train epoch: {epoch+1}/{params['epochs']} Step: {count} loss : {train_loss/count:.4f}")
+max_dict={'bleu4':0,'meteor':0,'rougeL':0,'cider':0}
+for i in range(100):
+    total_bleu=[]
+    total_meteor=[]
+    encoder.eval()
+    decoder.eval()
+    total_Rogue=[]
+    total_reference=[]
+    total_candidate=[]
 
     with torch.no_grad():
         val_count = 0
         val_loss = 0.0 
         val_bleu_score = 0.0
-        val = tqdm(val_dataloader)
+        val = tqdm(test_dataloader)
         for images, captions, lengths in val:
             
             images = images.to(device)
@@ -416,7 +482,7 @@ for epoch in range(params['epochs']):
             features = encoder(images)
             
             # 디코더에 입력 (손실 계산을 위해 교사 강요 적용)
-            outputs = decoder(features, captions, teacher_forcing_ratio=teacher_forcing_ratio)
+            outputs = decoder(features, captions, teacher_forcing_ratio=0.5)
             
             # 손실 계산을 위한 정렬
             captions_target = captions[:, 1:]
@@ -437,15 +503,30 @@ for epoch in range(params['epochs']):
                 target_caption = idx2word(vocab, captions[i])
                 
                 # 특수 토큰 제거
-                predicted_caption = [word for word in predicted_caption if word not in ['<start>', '<end>', '<pad>']]
-                target_caption = [word for word in target_caption if word not in ['<start>', '<end>', '<pad>']]
-                
+                predicted_caption = [word for word in predicted_caption if word not in ['<start>', '<end>', '<pad>','<unk>']]
+                target_caption = [word for word in target_caption if word not in ['<start>', '<end>', '<pad>','<unk>']]
+                reference = word2sentence(target_caption )
+                candidate = word2sentence(predicted_caption)
+                total_reference.append(reference)
+                total_candidate.append(candidate)
+                bleu1,bleu2,bleu3,bleu4=bleu_n(predicted_caption,target_caption)
+                rouge1, rouge2, rougeL = rouge_scores(candidate, reference)
+                total_bleu.append([bleu1,bleu2,bleu3,bleu4])
+                total_Rogue.append([rouge1, rouge2, rougeL])
+                meteor_score = pymeteor.pymeteor.meteor(reference, candidate)
+                total_meteor.append(meteor_score)
                 # BLEU-4 점수 계산
                 bleu_score = sentence_bleu([target_caption], predicted_caption, weights=(0.25, 0.25, 0.25, 0.25))
                 val_bleu_score += bleu_score
-            
-            val.set_description(f"val epoch: {epoch+1}/{params['epochs']} Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-4: {val_bleu_score/(val_count*params['batch_size']):.4f}")
-    if val_bleu_score/(val_count*params['batch_size'])>sum_loss:
-        sum_loss=val_bleu_score/(val_count*params['batch_size'])
-        torch.save(encoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_encoder_check.pth')
-        torch.save(decoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_decoder_check.pth')
+            val.set_description(f"Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-4: {val_bleu_score/(val_count*params['batch_size']):.4f}")
+    average_cider_score, cider_scores = calculate_cider(total_reference, total_candidate)
+    average_result = calculate_mean_sd_average_precision(total_reference, total_candidate)
+    Avg_gram_mean=average_result['mean']
+    Avg_gram_sd=average_result['sd']
+    if max_dict['bleu4']<val_bleu_score/(val_count*params['batch_size']):
+        max_dict['bleu4']=val_bleu_score/(val_count*params['batch_size'])
+        max_dict['meteor']=np.mean(total_meteor)
+        max_dict['rougeL']=np.mean(total_Rogue,axis=0)[2]
+        max_dict['cider']=average_cider_score
+
+print(f'Max Bleu-4:{max_dict["bleu4"]:.3f} Max Meteor:{max_dict["meteor"]:.3f} Max Rogue-L:{max_dict["rougeL"]:.3f} Max CIDEr:{max_dict["cider"]:.3f}')
