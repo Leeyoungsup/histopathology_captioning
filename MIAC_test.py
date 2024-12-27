@@ -22,7 +22,7 @@ from glob import glob
 from torchvision.transforms import ToTensor
 import time
 import json
-import pymeteor.pymeteor
+from nltk.translate.meteor_score import meteor_score
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from rouge_score import rouge_scorer
 from pycocoevalcap.cider.cider import Cider
@@ -457,18 +457,19 @@ model_param = list(decoder.parameters()) + list(encoder.parameters())
 optimizer = torch.optim.Adam(model_param, lr=params['lr'], betas=(params['beta1'], params['beta2']))
 encoder.load_state_dict(torch.load('../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_encoder_check.pth',map_location=device))
 decoder.load_state_dict(torch.load('../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_decoder_check.pth',map_location=device))
-
+encoder.eval()
+decoder.eval()
 max_dict={'bleu4':0,'meteor':0,'rougeL':0,'cider':0}
-for i in range(100):
-    total_bleu=[]
-    total_meteor=[]
-    encoder.eval()
-    decoder.eval()
-    total_Rogue=[]
-    total_reference=[]
-    total_candidate=[]
+mean_dict={'bleu4':0,'meteor':0,'rougeL':0,'cider':0}
 
-    with torch.no_grad():
+with torch.no_grad():
+    for i in range(1):
+        total_bleu=[]
+        total_meteor=[]
+
+        total_Rogue=[]
+        total_reference=[]
+        total_candidate=[]
         val_count = 0
         val_loss = 0.0 
         val_bleu_score = 0.0
@@ -513,20 +514,29 @@ for i in range(100):
                 rouge1, rouge2, rougeL = rouge_scores(candidate, reference)
                 total_bleu.append([bleu1,bleu2,bleu3,bleu4])
                 total_Rogue.append([rouge1, rouge2, rougeL])
-                meteor_score = pymeteor.pymeteor.meteor(reference, candidate)
-                total_meteor.append(meteor_score)
+                meteor_score_value = meteor_score([target_caption], predicted_caption)
+                total_meteor.append(meteor_score_value)
+                
                 # BLEU-4 점수 계산
                 bleu_score = sentence_bleu([target_caption], predicted_caption, weights=(0.25, 0.25, 0.25, 0.25))
                 val_bleu_score += bleu_score
             val.set_description(f"Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-4: {val_bleu_score/(val_count*params['batch_size']):.4f}")
-    average_cider_score, cider_scores = calculate_cider(total_reference, total_candidate)
-    average_result = calculate_mean_sd_average_precision(total_reference, total_candidate)
-    Avg_gram_mean=average_result['mean']
-    Avg_gram_sd=average_result['sd']
-    if max_dict['bleu4']<val_bleu_score/(val_count*params['batch_size']):
-        max_dict['bleu4']=val_bleu_score/(val_count*params['batch_size'])
-        max_dict['meteor']=np.mean(total_meteor)
-        max_dict['rougeL']=np.mean(total_Rogue,axis=0)[2]
-        max_dict['cider']=average_cider_score
-
-print(f'Max Bleu-4:{max_dict["bleu4"]:.3f} Max Meteor:{max_dict["meteor"]:.3f} Max Rogue-L:{max_dict["rougeL"]:.3f} Max CIDEr:{max_dict["cider"]:.3f}')
+        average_cider_score, cider_scores = calculate_cider(total_reference, total_candidate)
+        average_result = calculate_mean_sd_average_precision(total_reference, total_candidate)
+        Avg_gram_mean=average_result['mean']
+        Avg_gram_sd=average_result['sd']
+        if max_dict['bleu4']<val_bleu_score/(val_count*params['batch_size']):
+            max_dict['bleu4']=val_bleu_score/(val_count*params['batch_size'])
+            max_dict['meteor']=np.mean(total_meteor)
+            max_dict['rougeL']=np.array(total_Rogue)[:,2].mean()
+            max_dict['cider']=average_cider_score
+        mean_dict['bleu4']+=val_bleu_score/(val_count*params['batch_size'])
+        mean_dict['meteor']+=np.mean(total_meteor)
+        mean_dict['rougeL']+=np.array(total_Rogue)[:,2].mean()
+        mean_dict['cider']+=average_cider_score
+    mean_dict['bleu4']/=100
+    mean_dict['meteor']/=100
+    mean_dict['rougeL']/=100
+    mean_dict['cider']/=100
+print(f'Max Bleu-4:{max_dict["bleu4"]:.3f} Max Meteor:{max_dict["meteor"].item():.3f} Max Rogue-L:{max_dict["rougeL"].item():.3f} Max CIDEr:{max_dict["cider"]:.3f}')
+print(f'Mean Bleu-4:{mean_dict["bleu4"]:.3f} Mean Meteor:{mean_dict["meteor"].item():.3f} Mean Rogue-L:{mean_dict["rougeL"].item():.3f} Mean CIDEr:{mean_dict["cider"]:.3f}')
