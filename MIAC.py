@@ -36,7 +36,7 @@ params={'image_size':300,
         'epochs':10000,
         'image_count':50,
         'data_path':'../../data/PatchGastricADC22/',
-        'train_csv':'train_captions.csv',
+        'train_csv':'train_captions_backup.csv',
         'val_csv':'test_captions.csv',
         'vocab_path':'../../data/PatchGastricADC22/vocab.pkl',
         'embed_size':1024,
@@ -447,5 +447,5 @@ for epoch in range(params['epochs']):
             val.set_description(f"val epoch: {epoch+1}/{params['epochs']} Step: {val_count} loss : {val_loss/val_count:.4f} BLEU-4: {val_bleu_score/(val_count*params['batch_size']):.4f}")
     if val_bleu_score/(val_count*params['batch_size'])>sum_loss:
         sum_loss=val_bleu_score/(val_count*params['batch_size'])
-        torch.save(encoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_encoder_check.pth')
-        torch.save(decoder.state_dict(), '../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_decoder_check.pth')
+        torch.save(encoder.state_dict(), '../../model/backup/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_encoder_check.pth')
+        torch.save(decoder.state_dict(), '../../model/backup/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_decoder_check.pth')

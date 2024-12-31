@@ -39,7 +39,7 @@ params={'image_size':300,
         'beta2':0.999,
         'batch_size':4,
         'epochs':10000,
-        'image_count':25,
+        'image_count':50,
         'data_path':'../../data/PatchGastricADC22/',
         'test_csv':'test_captions.csv',
         'vocab_path':'../../data/PatchGastricADC22/vocab.pkl',
@@ -463,7 +463,7 @@ max_dict={'bleu4':0,'meteor':0,'rougeL':0,'cider':0}
 mean_dict={'bleu4':0,'meteor':0,'rougeL':0,'cider':0}
 
 with torch.no_grad():
-    for i in range(1):
+    for i in range(100):
         total_bleu=[]
         total_meteor=[]
 
