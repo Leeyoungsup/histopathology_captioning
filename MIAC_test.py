@@ -30,7 +30,7 @@ from nltk.util import ngrams
 from collections import Counter
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
 encoder_name='efficientnetv2_s'
 model_layer=1280
 params={'image_size':300,
@@ -459,11 +459,11 @@ encoder.load_state_dict(torch.load('../../model/'+encoder_name+'_and_transformer
 decoder.load_state_dict(torch.load('../../model/'+encoder_name+'_and_transformer_'+str(params['image_count'])+'_decoder_check.pth',map_location=device))
 encoder.eval()
 decoder.eval()
-max_dict={'bleu4':0,'meteor':0,'rougeL':0,'cider':0}
+std_dict={'bleu4':[],'meteor':[],'rougeL':[],'cider':[]}
 mean_dict={'bleu4':0,'meteor':0,'rougeL':0,'cider':0}
-
+roop=30
 with torch.no_grad():
-    for i in range(100):
+    for i in range(roop):
         total_bleu=[]
         total_meteor=[]
 
@@ -525,18 +525,18 @@ with torch.no_grad():
         average_result = calculate_mean_sd_average_precision(total_reference, total_candidate)
         Avg_gram_mean=average_result['mean']
         Avg_gram_sd=average_result['sd']
-        if max_dict['bleu4']<val_bleu_score/(val_count*params['batch_size']):
-            max_dict['bleu4']=val_bleu_score/(val_count*params['batch_size'])
-            max_dict['meteor']=np.mean(total_meteor)
-            max_dict['rougeL']=np.array(total_Rogue)[:,2].mean()
-            max_dict['cider']=average_cider_score
         mean_dict['bleu4']+=val_bleu_score/(val_count*params['batch_size'])
         mean_dict['meteor']+=np.mean(total_meteor)
         mean_dict['rougeL']+=np.array(total_Rogue)[:,2].mean()
         mean_dict['cider']+=average_cider_score
-    mean_dict['bleu4']/=100
-    mean_dict['meteor']/=100
-    mean_dict['rougeL']/=100
-    mean_dict['cider']/=100
-print(f'Max Bleu-4:{max_dict["bleu4"]:.3f} Max Meteor:{max_dict["meteor"].item():.3f} Max Rogue-L:{max_dict["rougeL"].item():.3f} Max CIDEr:{max_dict["cider"]:.3f}')
-print(f'Mean Bleu-4:{mean_dict["bleu4"]:.3f} Mean Meteor:{mean_dict["meteor"].item():.3f} Mean Rogue-L:{mean_dict["rougeL"].item():.3f} Mean CIDEr:{mean_dict["cider"]:.3f}')
+        
+        std_dict['bleu4'].append(val_bleu_score/(val_count*params['batch_size']))
+        std_dict['meteor'].append(np.mean(total_meteor))
+        std_dict['rougeL'].append(np.array(total_Rogue)[:,2].mean())
+        std_dict['cider'].append(average_cider_score)
+    mean_dict['bleu4']/=roop
+    mean_dict['meteor']/=roop
+    mean_dict['rougeL']/=roop
+    mean_dict['cider']/=roop
+
+print(f'Bleu-4:{np.array(std_dict["bleu4"]).min():.3f}+-{np.array(std_dict["bleu4"]).std():.3f} \nMeteor:{np.array(std_dict["meteor"]).min():.3f}+-{np.array(std_dict["meteor"]).std():.3f} \nRougeL:{np.array(std_dict["rougeL"]).min():.3f}+-{np.array(std_dict["rougeL"]).std():.3f} \nCider:{np.array(std_dict["cider"]).min():.3f}+-{np.array(std_dict["cider"]).std():.3f}')
