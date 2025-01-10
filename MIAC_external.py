@@ -25,7 +25,7 @@ import time
 import json
 nltk.download('punkt')
 tf = ToTensor()
-device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
 encoder_name='efficientnetv2_s'
 model_layer=1280
 params={'image_size':300,
@@ -34,11 +34,11 @@ params={'image_size':300,
         'beta2':0.999,
         'batch_size':4,
         'epochs':10000,
-        'image_count':10,
-        'data_path':'../../data/PatchGastricADC22/',
-        'train_csv':'train_captions_backup.csv',
-        'val_csv':'test_captions.csv',
-        'vocab_path':'../../data/PatchGastricADC22/vocab.pkl',
+        'image_count':25,
+        'data_path':'../../data/gcu_svs/',
+        'train_csv':'위암 생검 병리 진단지.csv',
+        'val_csv':'위암 생검 병리 진단지.csv',
+        'vocab_path':'../../data/gcu_svs/vocab.pkl',
         'embed_size':1024,
         'hidden_size':256,
         'num_layers':4,}
@@ -76,7 +76,7 @@ class CustomDataset(Dataset):
         df = self.df
         vocab = self.vocab
         img_id=df.loc[index]
-        image_path = glob(self.root+'f_patches_captions/'+img_id['id']+'/*.jpg')
+        image_path = glob(self.root+'svs/'+img_id['id']+'/*.png')
         caption=img_id['text']
         images=torch.zeros(self.image_count,3,self.image_size,self.image_size)
         image_index = torch.randint(low=0, high=len(
