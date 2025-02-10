@@ -56,41 +56,21 @@ The model is evaluated using standard **natural language processing (NLP) metric
 | **MIAC ×50 (ours)** | **0.617** | **0.731** | **0.506** | **5.588** |
 | SGMT ×32 Inference ×64 | 0.551 | 0.697 | 0.432 | 4.836 |
 | SGMT ×16 | 0.346 | 0.600 | 0.353 | 2.634 |
-![Figure4](https://github.com/user-attachments/assets/e59800a7-f41c-4196-90e5-799047cce69a)
+
 ### External Dataset Performance
 | Model (Training Patches) | BLEU@4 | ROUGE-L | METEOR | CIDEr |
 |--------------------------|--------|---------|--------|-------|
 | **MIAC ×50 (normalized)** | **0.375** | **0.577** | **0.336** | **4.382** |
 | MIAC ×50 (raw) | 0.357 | 0.550 | 0.318 | 4.150 |
 
+
+![Figure4](https://github.com/user-attachments/assets/e59800a7-f41c-4196-90e5-799047cce69a)
 ## Installation
 ```bash
 git clone https://github.com/Leeyoungsup/histopathology_captioning.git
 cd histopathology_captioning
 pip install -r requirements.txt
 ```
-
-## Usage
-### 1. Train the Model
-```bash
-python train.py --dataset PatchGastricADC22 --epochs 50 --batch_size 16
-```
-
-### 2. Evaluate the Model
-```bash
-python evaluate.py --model_path ./checkpoints/model.pth --test_set external
-```
-
-### 3. Run Inference on New Images
-```bash
-python inference.py --image_path ./sample_wsi.png
-```
-
-## Pretrained Models
-Download pretrained models:
-- **[MIAC (50 patches)](https://github.com/Leeyoungsup/histopathology_captioning/releases)**
-- **[MIAC (normalized)](https://github.com/Leeyoungsup/histopathology_captioning/releases)**
-
 ## Ethical Statement
 This study was approved by the **Institutional Review Board (IRB) of Gil Hospital of Gachon University (GBIRB2024-121)**. The requirement for patient consent was waived due to the retrospective nature of the study.
 
