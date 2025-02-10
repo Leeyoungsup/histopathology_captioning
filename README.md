@@ -23,13 +23,13 @@ This repository contains the implementation of the **Multi-Instance Self-Attenti
   - Validation: 91 WSIs
   - Test: 100 WSIs
 ![Figure1](https://github.com/user-attachments/assets/a9310a3e-fbd0-419a-9204-afa073fb8733)
-![Figure2](https://github.com/user-attachments/assets/cc1738d1-e656-4c21-91f7-bd5640e2eb18)
+
 ### External Dataset
 - Collected from **Gil Hospital of Gachon University**.
 - Contains **105 WSIs**, each with corresponding diagnostic captions written by pathologists.
 - **Ethical Approval:** GBIRB2024-121
 - Preprocessed using **Macenko normalization** to align staining variations across datasets.
-
+![Figure2](https://github.com/user-attachments/assets/cc1738d1-e656-4c21-91f7-bd5640e2eb18)
 ## Model Architecture
 The **MIAC model** consists of two key components:
 1. **Encoder:**
