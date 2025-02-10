@@ -1,7 +1,3 @@
-# histopathology_captioning
-
-
-
 
 
 
